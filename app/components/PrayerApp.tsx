@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import LocationPicker from './LocationPicker';
 import PrayerCard from './PrayerCard';
 import PrayerGrid from './PrayerGrid';
@@ -136,6 +136,39 @@ const PRAYER_LABELS: Record<string, string> = {
   isya: 'Isya',
 };
 
+// ── localStorage helpers ────────────────────────────────────
+const LS_LOCATION = 'jadwal_location';
+const LS_REMINDERS = 'jadwal_reminders';
+
+function loadSavedLocation(): { provinsi: string; kabkota: string } | null {
+  try {
+    const raw = localStorage.getItem(LS_LOCATION);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocation(provinsi: string, kabkota: string) {
+  try {
+    localStorage.setItem(LS_LOCATION, JSON.stringify({ provinsi, kabkota }));
+  } catch {}
+}
+
+function loadSavedReminders(): boolean {
+  try {
+    return localStorage.getItem(LS_REMINDERS) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveReminders(enabled: boolean) {
+  try {
+    localStorage.setItem(LS_REMINDERS, String(enabled));
+  } catch {}
+}
+
 export default function PrayerApp() {
   const [location, setLocation] = useState<LocationState>({ status: 'idle' });
   const [prayerData, setPrayerData] = useState<PrayerData | null>(null);
@@ -143,6 +176,8 @@ export default function PrayerApp() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(new Date());
   const [remindersEnabled, setRemindersEnabled] = useState(false);
+  // Track whether we've already bootstrapped from localStorage
+  const bootstrapped = useRef(false);
 
   useServiceWorker();
   const { requestAndSchedule, clearReminders } = usePrayerReminders();
@@ -222,11 +257,13 @@ export default function PrayerApp() {
             // Fall back to first city in province
             const fallback = cities[0];
             setLocation({ status: 'ready', provinsi: matchedProv, kabkota: fallback });
+            saveLocation(matchedProv, fallback);
             fetchSchedule(matchedProv, fallback);
             return;
           }
 
           setLocation({ status: 'ready', provinsi: matchedProv, kabkota: matchedCity });
+          saveLocation(matchedProv, matchedCity);
           fetchSchedule(matchedProv, matchedCity);
         } catch {
           setLocation({ status: 'denied' });
@@ -239,14 +276,38 @@ export default function PrayerApp() {
     );
   }, [fetchSchedule]);
 
+  // Bootstrap: restore persisted location + reminders, skip detection if we have a saved location
   useEffect(() => {
-    detectLocation();
-  }, [detectLocation]);
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+
+    const savedReminders = loadSavedReminders();
+    if (savedReminders) setRemindersEnabled(true);
+
+    const saved = loadSavedLocation();
+    if (saved) {
+      setLocation({ status: 'ready', provinsi: saved.provinsi, kabkota: saved.kabkota });
+      fetchSchedule(saved.provinsi, saved.kabkota);
+    } else {
+      detectLocation();
+    }
+  }, [detectLocation, fetchSchedule]);
 
   const handleManualSelect = (provinsi: string, kabkota: string) => {
     setLocation({ status: 'manual', provinsi, kabkota });
+    saveLocation(provinsi, kabkota);
     fetchSchedule(provinsi, kabkota);
   };
+
+  // Persist reminder preference whenever it changes (skip the initial render)
+  const isFirstReminderRender = useRef(true);
+  useEffect(() => {
+    if (isFirstReminderRender.current) {
+      isFirstReminderRender.current = false;
+      return;
+    }
+    saveReminders(remindersEnabled);
+  }, [remindersEnabled]);
 
   const todayStr = now.toISOString().slice(0, 10);
   // Use local date string to avoid UTC offset issues
@@ -291,7 +352,10 @@ export default function PrayerApp() {
             </h1>
             {locationName && (
               <button
-                onClick={() => setLocation({ status: 'denied' })}
+                onClick={() => {
+                setLocation({ status: 'denied' });
+                try { localStorage.removeItem('jadwal_location'); } catch {}
+              }}
                 className="mt-1 text-xs text-zinc-500 underline underline-offset-2"
               >
                 Ubah lokasi
