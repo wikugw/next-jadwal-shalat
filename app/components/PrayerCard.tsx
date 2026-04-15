@@ -75,7 +75,7 @@ export default function PrayerCard({ schedule, now }: Props) {
   });
 
   const nextPrayer = PRAYERS.find((p) => p.key === nextKey);
-  const nextTime = nextKey ? schedule[nextKey] : null;
+  const nextTime = nextKey ? schedule[nextKey as keyof JadwalItem] as string : null;
   let countdown = '';
   if (nextTime) {
     const diff = timeToMinutes(nextTime) - currentMinutes;
@@ -108,7 +108,7 @@ export default function PrayerCard({ schedule, now }: Props) {
         {PRAYERS.map((p) => {
           const isNext = p.key === nextKey;
           const isCurrent = p.key === currentKey && !isNext;
-          const isPast = timeToMinutes(schedule[p.key]) < currentMinutes && !isNext;
+          const isPast = timeToMinutes(schedule[p.key as keyof JadwalItem] as string) < currentMinutes && !isNext;
 
           return (
             <div
@@ -141,7 +141,7 @@ export default function PrayerCard({ schedule, now }: Props) {
                   ${isPast && !isCurrent ? 'text-zinc-600' : 'text-zinc-300'}
                 `}
               >
-                {schedule[p.key]}
+                {schedule[p.key as keyof JadwalItem] as string}
               </span>
             </div>
           );
