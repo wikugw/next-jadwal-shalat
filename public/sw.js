@@ -6,8 +6,8 @@
 //   3. Show prayer reminder notifications
 // ============================================================
 
-const SHELL_CACHE = 'shell-v1';
-const JADWAL_CACHE = 'jadwal-v1';
+const SHELL_CACHE = 'shell-v2';
+const JADWAL_CACHE = 'jadwal-v2';
 
 // App shell: static assets that make the app load offline
 const SHELL_URLS = [
@@ -66,16 +66,25 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
+// ── POST cache key: use URL + sorted body as cache key ───────
+// The Cache API only supports GET requests natively.
+// For POST routes we read the body, build a synthetic GET cache key,
+// and store/retrieve against that key instead.
+async function postCacheKey(request) {
+  const body = await request.clone().text();
+  return new Request(request.url + '?_body=' + encodeURIComponent(body), { method: 'GET' });
+}
+
 // ── Strategy: jadwal (stale-while-revalidate) ────────────────
 async function jadwalStrategy(request) {
   const cache = await caches.open(JADWAL_CACHE);
-  const cached = await cache.match(request);
+  const cacheKey = await postCacheKey(request);
+  const cached = await cache.match(cacheKey);
 
-  // Clone before consuming
-  const networkPromise = fetchAndCache(request.clone(), cache);
+  // Background revalidation
+  const networkPromise = fetchAndCachePost(request.clone(), cache, cacheKey);
 
   if (cached) {
-    // Serve cached, refresh in background
     networkPromise.catch(() => {}); // silent bg failure
     return cached;
   }
@@ -91,13 +100,30 @@ async function jadwalStrategy(request) {
   }
 }
 
-// ── Strategy: province/city lists (cache-first, 7 days TTL) ──
+// ── Strategy: province/city lists (cache-first) ───────────────
 async function listStrategy(request) {
   const cache = await caches.open(JADWAL_CACHE);
+
+  // kabkota uses POST; provinsi uses GET
+  if (request.method === 'POST') {
+    const cacheKey = await postCacheKey(request);
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+    try {
+      return await fetchAndCachePost(request, cache, cacheKey);
+    } catch {
+      return new Response(
+        JSON.stringify({ code: 503, message: 'Offline' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  }
+
+  // GET (provinsi)
   const cached = await cache.match(request);
   if (cached) return cached;
   try {
-    return await fetchAndCache(request, cache);
+    return await fetchAndCacheGet(request, cache);
   } catch {
     return new Response(
       JSON.stringify({ code: 503, message: 'Offline' }),
@@ -119,11 +145,17 @@ async function shellStrategy(request) {
   }
 }
 
-async function fetchAndCache(request, cache) {
+// Fetch a GET request and store it under the same request key
+async function fetchAndCacheGet(request, cache) {
   const response = await fetch(request);
-  if (response.ok) {
-    cache.put(request, response.clone());
-  }
+  if (response.ok) cache.put(request, response.clone());
+  return response;
+}
+
+// Fetch a POST request and store the response under a synthetic GET cache key
+async function fetchAndCachePost(request, cache, cacheKey) {
+  const response = await fetch(request);
+  if (response.ok) cache.put(cacheKey, response.clone());
   return response;
 }
 
