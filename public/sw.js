@@ -2,20 +2,19 @@
 // Service Worker — jadwal-shalat
 // Responsibilities:
 //   1. Cache app shell on install (offline-first)
-//   2. Cache API responses (jadwal) with stale-while-revalidate
-//   3. Show prayer reminder notifications
+//   2. Cache API responses with stale-while-revalidate
+//
+// NOTE: Prayer reminder scheduling is done in the main thread (usePWA.ts).
+// The main thread calls reg.showNotification() directly when a timer fires,
+// which wakes this SW to display it — no SW-side setTimeout needed.
 // ============================================================
 
 const SHELL_CACHE = 'shell-v2';
 const JADWAL_CACHE = 'jadwal-v2';
 
-// App shell: static assets that make the app load offline
-const SHELL_URLS = [
-  '/',
-  '/manifest.json',
-];
+const SHELL_URLS = ['/', '/manifest.json'];
 
-// ── Install: precache shell ──────────────────────────────────
+// ── Install ──────────────────────────────────────────────────
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_URLS))
@@ -23,7 +22,7 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// ── Activate: clean old caches ───────────────────────────────
+// ── Activate ─────────────────────────────────────────────────
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -37,17 +36,15 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// ── Fetch: intercept network requests ───────────────────────
+// ── Fetch ─────────────────────────────────────────────────────
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // API proxy routes: cache-first with background revalidation
   if (url.pathname.startsWith('/api/shalat/jadwal')) {
     event.respondWith(jadwalStrategy(event.request));
     return;
   }
 
-  // Province/city lists: cache-first (rarely changes)
   if (
     url.pathname.startsWith('/api/shalat/provinsi') ||
     url.pathname.startsWith('/api/shalat/kabkota')
@@ -56,7 +53,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell: network-first, fall back to cache
   if (
     url.origin === self.location.origin &&
     (event.request.mode === 'navigate' || url.pathname.startsWith('/_next/'))
@@ -66,30 +62,27 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-// ── POST cache key: use URL + sorted body as cache key ───────
-// The Cache API only supports GET requests natively.
-// For POST routes we read the body, build a synthetic GET cache key,
-// and store/retrieve against that key instead.
+// ── POST cache key helper ─────────────────────────────────────
+// Cache API only natively supports GET. For POST routes we build a
+// synthetic GET key from URL + body so we can store/retrieve responses.
 async function postCacheKey(request) {
   const body = await request.clone().text();
   return new Request(request.url + '?_body=' + encodeURIComponent(body), { method: 'GET' });
 }
 
-// ── Strategy: jadwal (stale-while-revalidate) ────────────────
+// ── Strategy: jadwal (stale-while-revalidate) ─────────────────
 async function jadwalStrategy(request) {
   const cache = await caches.open(JADWAL_CACHE);
   const cacheKey = await postCacheKey(request);
   const cached = await cache.match(cacheKey);
 
-  // Background revalidation
   const networkPromise = fetchAndCachePost(request.clone(), cache, cacheKey);
 
   if (cached) {
-    networkPromise.catch(() => {}); // silent bg failure
+    networkPromise.catch(() => {});
     return cached;
   }
 
-  // No cache: must wait for network
   try {
     return await networkPromise;
   } catch {
@@ -104,7 +97,6 @@ async function jadwalStrategy(request) {
 async function listStrategy(request) {
   const cache = await caches.open(JADWAL_CACHE);
 
-  // kabkota uses POST; provinsi uses GET
   if (request.method === 'POST') {
     const cacheKey = await postCacheKey(request);
     const cached = await cache.match(cacheKey);
@@ -112,27 +104,26 @@ async function listStrategy(request) {
     try {
       return await fetchAndCachePost(request, cache, cacheKey);
     } catch {
-      return new Response(
-        JSON.stringify({ code: 503, message: 'Offline' }),
-        { status: 503, headers: { 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ code: 503 }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
   }
 
-  // GET (provinsi)
   const cached = await cache.match(request);
   if (cached) return cached;
   try {
     return await fetchAndCacheGet(request, cache);
   } catch {
-    return new Response(
-      JSON.stringify({ code: 503, message: 'Offline' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ code: 503 }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 }
 
-// ── Strategy: shell (network-first, cache fallback) ──────────
+// ── Strategy: shell (network-first, cache fallback) ───────────
 async function shellStrategy(request) {
   const cache = await caches.open(SHELL_CACHE);
   try {
@@ -140,80 +131,23 @@ async function shellStrategy(request) {
     if (response.ok) cache.put(request, response.clone());
     return response;
   } catch {
-    return (await cache.match(request)) ||
-      new Response('Offline', { status: 503 });
+    return (await cache.match(request)) || new Response('Offline', { status: 503 });
   }
 }
 
-// Fetch a GET request and store it under the same request key
 async function fetchAndCacheGet(request, cache) {
   const response = await fetch(request);
   if (response.ok) cache.put(request, response.clone());
   return response;
 }
 
-// Fetch a POST request and store the response under a synthetic GET cache key
 async function fetchAndCachePost(request, cache, cacheKey) {
   const response = await fetch(request);
   if (response.ok) cache.put(cacheKey, response.clone());
   return response;
 }
 
-// ── Prayer reminder notifications ────────────────────────────
-// The app sends a 'SCHEDULE_REMINDERS' message with today's schedule.
-// We store active timers here (keyed by prayer name).
-const timers = new Map();
-
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SCHEDULE_REMINDERS') {
-    scheduleReminders(event.data.prayers, event.data.date);
-  }
-  if (event.data?.type === 'CLEAR_REMINDERS') {
-    clearAllTimers();
-  }
-});
-
-function clearAllTimers() {
-  for (const id of timers.values()) clearTimeout(id);
-  timers.clear();
-}
-
-function scheduleReminders(prayers, dateStr) {
-  clearAllTimers();
-
-  const now = Date.now();
-  const LEAD_MS = 15 * 60 * 1000; // 15 minutes before
-
-  for (const { name, label, time } of prayers) {
-    const [h, m] = time.split(':').map(Number);
-    const prayerDate = new Date(dateStr);
-    prayerDate.setHours(h, m, 0, 0);
-
-    const notifyAt = prayerDate.getTime() - LEAD_MS;
-    const delay = notifyAt - now;
-
-    if (delay < 0) continue; // already passed
-
-    const id = setTimeout(async () => {
-      try {
-        await self.registration.showNotification(`🕌 ${label} dalam 15 menit`, {
-          body: `Waktu ${label} pukul ${time}`,
-          icon: '/icons/icon-192.png',
-          badge: '/icons/badge-72.png',
-          tag: name,
-          renotify: true,
-          silent: false,
-          data: { prayer: name },
-        });
-      } catch (e) {
-        console.warn('Notification failed:', e);
-      }
-    }, delay);
-
-    timers.set(name, id);
-  }
-}
-
+// ── Notification click ────────────────────────────────────────
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
