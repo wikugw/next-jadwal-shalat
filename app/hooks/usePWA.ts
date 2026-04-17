@@ -8,6 +8,12 @@ interface Prayer {
   time: string;
 }
 
+// Extend NotificationOptions to include fields not yet in all TS lib versions
+interface FullNotificationOptions extends NotificationOptions {
+  renotify?: boolean;
+  silent?: boolean;
+}
+
 // ── Register SW once on mount ────────────────────────────────
 export function useServiceWorker() {
   useEffect(() => {
@@ -60,26 +66,28 @@ export function usePrayerReminders() {
           if ('serviceWorker' in navigator) {
             try {
               const reg = await navigator.serviceWorker.ready;
-              await reg.showNotification(`🕌 ${label} dalam 15 menit`, {
+              const swOpts: FullNotificationOptions = {
                 body: `Waktu ${label} pukul ${time}`,
                 icon: '/icons/icon-192.png',
                 badge: '/icons/badge-72.png',
                 tag: name,
                 renotify: true,
                 silent: false,
-              });
+              };
+              await reg.showNotification(`🕌 ${label} dalam 15 menit`, swOpts);
               return;
             } catch {
               // SW notification failed, fall through to Notification API
             }
           }
           // Fallback: direct Notification API (works when tab is in foreground)
-          new Notification(`🕌 ${label} dalam 15 menit`, {
+          const fallbackOpts: FullNotificationOptions = {
             body: `Waktu ${label} pukul ${time}`,
             icon: '/icons/icon-192.png',
             tag: name,
             silent: false,
-          });
+          };
+          new Notification(`🕌 ${label} dalam 15 menit`, fallbackOpts);
         }, delay);
 
         timersRef.current.set(name, id);
