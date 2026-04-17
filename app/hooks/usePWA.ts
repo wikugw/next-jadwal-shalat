@@ -68,8 +68,8 @@ export function usePrayerReminders() {
               const reg = await navigator.serviceWorker.ready;
               const swOpts: FullNotificationOptions = {
                 body: `Waktu ${label} pukul ${time}`,
-                icon: '/icons/icon-192.png',
-                badge: '/icons/badge-72.png',
+                icon: '/icons/icon-192',
+                badge: '/icons/badge-72',
                 tag: name,
                 renotify: true,
                 silent: false,
@@ -83,7 +83,7 @@ export function usePrayerReminders() {
           // Fallback: direct Notification API (works when tab is in foreground)
           const fallbackOpts: FullNotificationOptions = {
             body: `Waktu ${label} pukul ${time}`,
-            icon: '/icons/icon-192.png',
+            icon: '/icons/icon-192',
             tag: name,
             silent: false,
           };
