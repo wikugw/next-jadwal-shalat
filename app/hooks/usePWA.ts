@@ -14,23 +14,26 @@ interface FullNotificationOptions extends NotificationOptions {
   silent?: boolean;
 }
 
-// ── Register SW once on mount ────────────────────────────────
+// ── Register SW + suppress PWA install banner ────────────────
 export function useServiceWorker() {
   useEffect(() => {
+    // Intercept the "add to home screen" / "tap to copy URL" banner.
+    // Calling preventDefault() stops Chrome from showing it automatically.
+    const handler = (e: Event) => e.preventDefault();
+    window.addEventListener('beforeinstallprompt', handler);
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
         .catch((err) => console.warn('SW registration failed:', err));
     }
+
+    return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 }
 
 // ── Prayer reminders ─────────────────────────────────────────
-// Key insight: setTimeout in a SW can be killed by the browser at any time.
-// The reliable pattern is to keep timers in the MAIN THREAD (long-lived tab),
-// and only call sw.showNotification() when the timer fires — that wakes the SW.
 export function usePrayerReminders() {
-  // Map of prayer name → timer id
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const clearReminders = useCallback(() => {
@@ -38,17 +41,19 @@ export function usePrayerReminders() {
     timersRef.current.clear();
   }, []);
 
-  const requestAndSchedule = useCallback(
-    async (prayers: Prayer[], dateStr: string) => {
-      if (!('Notification' in window)) return;
+  // Call this when the user explicitly toggles ON — requests permission immediately.
+  const requestPermission = useCallback(async (): Promise<boolean> => {
+    if (!('Notification' in window)) return false;
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
+    const result = await Notification.requestPermission();
+    return result === 'granted';
+  }, []);
 
-      // Ask for permission if needed
-      if (Notification.permission === 'default') {
-        await Notification.requestPermission();
-      }
+  const scheduleAll = useCallback(
+    (prayers: Prayer[], dateStr: string) => {
       if (Notification.permission !== 'granted') return;
 
-      // Clear existing timers before rescheduling
       clearReminders();
 
       const LEAD_MS = 15 * 60 * 1000; // 15 min before
@@ -59,10 +64,9 @@ export function usePrayerReminders() {
         prayerDate.setHours(h, m, 0, 0);
 
         const delay = prayerDate.getTime() - LEAD_MS - Date.now();
-        if (delay < 0) continue; // already past
+        if (delay < 0) continue;
 
         const id = setTimeout(async () => {
-          // Try SW notification first (shows even if tab is backgrounded)
           if ('serviceWorker' in navigator) {
             try {
               const reg = await navigator.serviceWorker.ready;
@@ -77,10 +81,9 @@ export function usePrayerReminders() {
               await reg.showNotification(`🕌 ${label} dalam 15 menit`, swOpts);
               return;
             } catch {
-              // SW notification failed, fall through to Notification API
+              // fall through
             }
           }
-          // Fallback: direct Notification API (works when tab is in foreground)
           const fallbackOpts: FullNotificationOptions = {
             body: `Waktu ${label} pukul ${time}`,
             icon: '/icons/icon-192',
@@ -96,10 +99,9 @@ export function usePrayerReminders() {
     [clearReminders]
   );
 
-  // Clean up on unmount
   useEffect(() => {
     return () => clearReminders();
   }, [clearReminders]);
 
-  return { requestAndSchedule, clearReminders };
+  return { requestPermission, scheduleAll, clearReminders };
 }

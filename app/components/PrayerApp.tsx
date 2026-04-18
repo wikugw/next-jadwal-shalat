@@ -180,7 +180,7 @@ export default function PrayerApp() {
   const bootstrapped = useRef(false);
 
   useServiceWorker();
-  const { requestAndSchedule, clearReminders } = usePrayerReminders();
+  const { requestPermission, scheduleAll, clearReminders } = usePrayerReminders();
 
   // Tick every minute
   useEffect(() => {
@@ -333,8 +333,8 @@ export default function PrayerApp() {
         label: PRAYER_LABELS[k],
         time: todaySchedule[k] as string,
       }));
-    requestAndSchedule(prayers, localDateStr);
-  }, [todaySchedule, remindersEnabled, localDateStr, requestAndSchedule, clearReminders]);
+    scheduleAll(prayers, localDateStr);
+  }, [todaySchedule, remindersEnabled, localDateStr, scheduleAll, clearReminders]);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-white flex flex-col">
@@ -365,7 +365,16 @@ export default function PrayerApp() {
           {locationName && (
             <ReminderToggle
               enabled={remindersEnabled}
-              onToggle={setRemindersEnabled}
+              onToggle={async (next) => {
+                if (next) {
+                  const granted = await requestPermission();
+                  if (granted) setRemindersEnabled(true);
+                  return granted;
+                } else {
+                  setRemindersEnabled(false);
+                  return true;
+                }
+              }}
             />
           )}
         </div>
