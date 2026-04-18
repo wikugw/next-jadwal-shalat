@@ -43,7 +43,7 @@ export function usePrayerReminders() {
           badge: '/icons/badge-72.png',
           tag,
           renotify: true,
-        });
+        } as NotificationOptions & { renotify: boolean });
         return;
       }
     } catch (e) {
