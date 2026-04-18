@@ -180,7 +180,7 @@ export default function PrayerApp() {
   const bootstrapped = useRef(false);
 
   useServiceWorker();
-  const { requestPermission, scheduleAll, clearReminders } = usePrayerReminders();
+  const { requestPermission, scheduleAll, clearReminders, testNotification } = usePrayerReminders();
 
   // Tick every minute
   useEffect(() => {
@@ -363,19 +363,32 @@ export default function PrayerApp() {
             )}
           </div>
           {locationName && (
-            <ReminderToggle
-              enabled={remindersEnabled}
-              onToggle={async (next) => {
-                if (next) {
-                  const granted = await requestPermission();
-                  if (granted) setRemindersEnabled(true);
-                  return granted;
-                } else {
-                  setRemindersEnabled(false);
-                  return true;
-                }
-              }}
-            />
+            <div className="flex items-center gap-2">
+              {/* Test button — uncomment to debug notifications
+              {remindersEnabled && (
+                <button
+                  onClick={testNotification}
+                  title="Kirim notifikasi test sekarang"
+                  className="text-xs px-2 py-1 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  Test 🔔
+                </button>
+              )}
+              */}
+              <ReminderToggle
+                enabled={remindersEnabled}
+                onToggle={async (next) => {
+                  if (next) {
+                    const granted = await requestPermission();
+                    if (granted) setRemindersEnabled(true);
+                    return granted;
+                  } else {
+                    setRemindersEnabled(false);
+                    return true;
+                  }
+                }}
+              />
+            </div>
           )}
         </div>
       </header>
