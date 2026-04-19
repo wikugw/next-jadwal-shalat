@@ -180,7 +180,24 @@ export default function PrayerApp() {
   const bootstrapped = useRef(false);
 
   useServiceWorker();
-  const { requestPermission, scheduleAll, clearReminders, testNotification } = usePrayerReminders();
+  const { requestPermission, scheduleAll, clearSchedule, testNotification } = usePrayerReminders();
+
+  // Bridge: SW asks main thread for localStorage schedule
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'GET_SCHEDULE') {
+        const raw = localStorage.getItem('prayer_schedule');
+        const prayers = raw ? JSON.parse(raw) : [];
+        // Reply back to the SW
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.active?.postMessage({ type: 'SCHEDULE_DATA', prayers });
+        });
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handler);
+    return () => navigator.serviceWorker.removeEventListener('message', handler);
+  }, []);
 
   // Tick every minute
   useEffect(() => {
@@ -323,7 +340,7 @@ export default function PrayerApp() {
   // Schedule reminders whenever today's schedule or toggle changes
   useEffect(() => {
     if (!todaySchedule || !remindersEnabled) {
-      if (!remindersEnabled) clearReminders();
+      if (!remindersEnabled) clearSchedule();
       return;
     }
     const prayers = (Object.keys(PRAYER_LABELS) as Array<keyof typeof todaySchedule>)
@@ -334,7 +351,7 @@ export default function PrayerApp() {
         time: todaySchedule[k] as string,
       }));
     scheduleAll(prayers, localDateStr);
-  }, [todaySchedule, remindersEnabled, localDateStr, scheduleAll, clearReminders]);
+  }, [todaySchedule, remindersEnabled, localDateStr, scheduleAll, clearSchedule]);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-white flex flex-col">
@@ -364,6 +381,7 @@ export default function PrayerApp() {
           </div>
           {locationName && (
             <div className="flex items-center gap-2">
+              {/* Test button — uncomment to debug
               {remindersEnabled && (
                 <button
                   onClick={testNotification}
@@ -373,6 +391,7 @@ export default function PrayerApp() {
                   Test 🔔
                 </button>
               )}
+              */}
               <ReminderToggle
                 enabled={remindersEnabled}
                 onToggle={async (next) => {
