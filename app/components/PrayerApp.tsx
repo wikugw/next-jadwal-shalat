@@ -364,7 +364,6 @@ export default function PrayerApp() {
           </div>
           {locationName && (
             <div className="flex items-center gap-2">
-              {/* Test button — uncomment to debug notifications
               {remindersEnabled && (
                 <button
                   onClick={testNotification}
@@ -374,7 +373,6 @@ export default function PrayerApp() {
                   Test 🔔
                 </button>
               )}
-              */}
               <ReminderToggle
                 enabled={remindersEnabled}
                 onToggle={async (next) => {
