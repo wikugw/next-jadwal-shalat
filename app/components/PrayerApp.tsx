@@ -350,8 +350,12 @@ export default function PrayerApp() {
         label: PRAYER_LABELS[k],
         time: todaySchedule[k] as string,
       }));
-    scheduleAll(prayers, localDateStr);
-  }, [todaySchedule, remindersEnabled, localDateStr, scheduleAll, clearSchedule]);
+    const loc =
+      location.status === 'ready' || location.status === 'manual'
+        ? { provinsi: location.provinsi, kabkota: location.kabkota }
+        : undefined;
+    scheduleAll(prayers, localDateStr, loc);
+  }, [todaySchedule, remindersEnabled, localDateStr, scheduleAll, clearSchedule, location]);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-white flex flex-col">

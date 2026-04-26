@@ -5,11 +5,20 @@ import { useEffect, useCallback } from 'react';
 export interface ScheduledPrayer {
   name: string;
   label: string;
-  time: string;       // "HH:MM"
-  dateStr: string;    // "YYYY-MM-DD"
+  time: string;    // "HH:MM"
+  dateStr: string; // "YYYY-MM-DD"
 }
 
 const STORAGE_KEY = 'prayer_schedule';
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const arr = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) arr[i] = rawData.charCodeAt(i);
+  return arr;
+}
 
 // ── Register SW ──────────────────────────────────────────────
 export function useServiceWorker() {
@@ -19,7 +28,6 @@ export function useServiceWorker() {
         .register('/sw.js', { scope: '/' })
         .then((reg) => {
           console.log('[SW] registered');
-          // Tell SW to start its ticker
           reg.active?.postMessage({ type: 'START_TICKER' });
         })
         .catch((err) => console.warn('[SW] registration failed:', err));
@@ -37,36 +45,88 @@ export function usePrayerReminders() {
     return result === 'granted';
   }, []);
 
-  // Save schedule to localStorage so SW can read it
   const saveSchedule = useCallback((prayers: ScheduledPrayer[]) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(prayers));
-      console.log('[Notif] Schedule saved to localStorage:', prayers.length, 'prayers');
     } catch (e) {
       console.warn('[Notif] Failed to save schedule:', e);
     }
   }, []);
 
-  const clearSchedule = useCallback(() => {
+  const clearSchedule = useCallback(async () => {
     localStorage.removeItem(STORAGE_KEY);
-    console.log('[Notif] Schedule cleared');
-    // Tell SW to clear its fired-set too
+
+    // Unsubscribe from server push
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.ready.then((reg) => {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await fetch('/api/push/subscribe', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+          });
+          await sub.unsubscribe();
+          console.log('[Push] Unsubscribed from server push');
+        }
         reg.active?.postMessage({ type: 'CLEAR_FIRED' });
-      });
+      } catch (e) {
+        console.warn('[Push] Unsubscribe failed:', e);
+      }
     }
   }, []);
 
   const scheduleAll = useCallback(
-    async (prayers: Omit<ScheduledPrayer, 'dateStr'>[], dateStr: string) => {
+    async (
+      prayers: Omit<ScheduledPrayer, 'dateStr'>[],
+      dateStr: string,
+      location?: { provinsi: string; kabkota: string }
+    ) => {
       const granted = await requestPermission();
       if (!granted) return;
 
       const full: ScheduledPrayer[] = prayers.map((p) => ({ ...p, dateStr }));
+
+      // 1. Save to localStorage (SW ticker fallback when app is open)
       saveSchedule(full);
 
-      // Ping SW to re-read schedule now
+      // 2. Server push subscription (true background notifications)
+      if ('serviceWorker' in navigator && process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY) {
+        try {
+          const reg = await navigator.serviceWorker.ready;
+          let sub = await reg.pushManager.getSubscription();
+
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(
+                process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+              ),
+            });
+            console.log('[Push] New push subscription created');
+          }
+
+          const res = await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscription: sub.toJSON(),
+              schedule: full,
+              kabkota: location?.kabkota ?? null,
+              provinsi: location?.provinsi ?? null,
+              tzOffset: new Date().getTimezoneOffset(),
+            }),
+          });
+
+          if (!res.ok) throw new Error(await res.text());
+          console.log('[Push] Subscribed to server push ✓');
+        } catch (e) {
+          console.warn('[Push] Server push failed, SW ticker is fallback:', e);
+        }
+      }
+
+      // 3. Ping SW ticker to check schedule immediately
       if ('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.ready;
         reg.active?.postMessage({ type: 'RELOAD_SCHEDULE' });
@@ -75,13 +135,12 @@ export function usePrayerReminders() {
     [requestPermission, saveSchedule]
   );
 
-  // Re-ping SW every time the page becomes visible (app re-opened)
+  // Re-ping SW on every app focus/re-open
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible' && 'serviceWorker' in navigator) {
         navigator.serviceWorker.ready.then((reg) => {
           reg.active?.postMessage({ type: 'RELOAD_SCHEDULE' });
-          console.log('[Notif] Page visible, pinged SW to reload schedule');
         });
       }
     };
@@ -89,7 +148,7 @@ export function usePrayerReminders() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
-  // Test: fire immediately
+  // Test: fire a notification immediately
   const testNotification = useCallback(async () => {
     const granted = await requestPermission();
     if (!granted) return;

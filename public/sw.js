@@ -245,6 +245,21 @@ async function fetchAndCachePost(request, cache, cacheKey) {
   return response;
 }
 
+// ── Push (from server via Vercel Cron) ──────────────────────
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  const { title, body, tag } = event.data.json();
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-72.png',
+      tag,
+      renotify: true,
+    })
+  );
+});
+
 // ── Notification click ────────────────────────────────────────
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
